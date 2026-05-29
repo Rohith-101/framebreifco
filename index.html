@@ -1,94 +1,115 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Brand Image Concept Generator</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
-<style>
-/* ─── RESET & TOKENS ─────────────────────────────────────── */
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg:        #0F0E0C;
-  --bg2:       #161410;
-  --bg3:       #1E1C18;
-  --bg4:       #252219;
-  --border:    #2E2B24;
-  --border2:   #3D3930;
-  --cream:     #EDE8DE;
-  --cream2:    #C5BFB0;
-  --cream3:    #7A7568;
-  --accent:    #D4580A;
-  --accent2:   #F07030;
-  --accent-dim:#2A1A0A;
-  --green:     #3A8C5C;
-  --green-dim: #0A2015;
-  --amber:     #B07820;
-  --amber-dim: #1E1500;
-  --blue:      #3070C0;
-  --blue-dim:  #081030;
-  --red:       #C03030;
-  --r-sm:4px;--r-md:8px;--r-lg:12px;--r-xl:16px;
-}
-html{font-size:15px;scroll-behavior:smooth}
-body{
-  font-family:'Outfit',sans-serif;
-  background:var(--bg);color:var(--cream);
-  min-height:100vh;line-height:1.6;
-  -webkit-font-smoothing:antialiased;
-  display:flex;flex-direction:column;
-}
+  // initial call
+  const r=await fetch('/api/gemini',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({messages:[{role:'user',content:prompt}]})
+  });
+  const d=await r.json();
+  if(!r.ok||d.error) throw new Error(d.error||`API error ${r.status}`);
 
-/* ─── SCROLLBAR ───────────────────────────────────────────── */
-::-webkit-scrollbar{width:4px}
-::-webkit-scrollbar-track{background:var(--bg)}
-::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+  const raw = (typeof d.text === 'string') ? d.text : JSON.stringify(d);
+  const cleaned = raw.replace(/```json|```/g,'').trim();
 
-/* ─── TOPBAR ─────────────────────────────────────────────── */
-.topbar{
-  height:52px;background:var(--bg2);
-  border-bottom:1px solid var(--border);
-  display:flex;align-items:center;justify-content:space-between;
-  padding:0 28px;position:sticky;top:0;z-index:200;
-  flex-shrink:0;
-}
-.topbar-left{display:flex;align-items:center;gap:12px}
-.logo-mark{
-  width:26px;height:26px;border-radius:6px;
-  background:var(--accent);
-  display:flex;align-items:center;justify-content:center;
-  font-size:13px;font-weight:700;color:#fff;font-family:'Playfair Display',serif;
-}
-.topbar-title{
-  font-family:'Playfair Display',serif;
-  font-size:15px;color:var(--cream);letter-spacing:-0.01em;
-}
-.topbar-sep{width:1px;height:14px;background:var(--border2)}
-.topbar-sub{font-size:12px;color:var(--cream3);font-weight:300}
-.topbar-right{display:flex;align-items:center;gap:10px}
-.topbar-pill{
-  font-size:11px;font-weight:500;color:var(--cream3);
-  border:1px solid var(--border2);border-radius:100px;
-  padding:4px 12px;letter-spacing:0.02em;
-}
-.step-indicator{
-  display:flex;align-items:center;gap:6px;
-  font-size:12px;color:var(--cream3);font-weight:400;
-}
-.step-dot{
-  width:6px;height:6px;border-radius:50%;
-  background:var(--border2);transition:background 0.3s;
-}
-.step-dot.active{background:var(--accent)}
-.step-dot.done{background:var(--green)}
+  function findCandidates(s){
+    const candidates = [];
+    for(let i=0;i<s.length;i++){
+      const ch = s[i];
+      if(ch !== '{' && ch !== '[') continue;
+      const stack = [];
+      let j = i;
+      for(; j<s.length; j++){
+        const c = s[j];
+        if(c === '{' || c === '[') stack.push(c);
+        else if(c === '}' || c === ']'){
+          stack.pop();
+          if(stack.length === 0) break;
+        }
+      }
+      if(j < s.length){
+        candidates.push(s.slice(i, j+1));
+      }
+    }
+    return candidates;
+  }
 
-/* ─── SHELL ──────────────────────────────────────────────── */
-.shell{display:flex;flex:1;min-height:0}
+  function repairCommonErrors(str){
+    let s = str;
+    s = s.replace(/\"([a-zA-Z0-9_]+)\"\s*\(\s*\[/g, '"$1":[');
+    s = s.replace(/\"([a-zA-Z0-9_]+)\"\s*\(\s*\{/g, '"$1":{');
+    s = s.replace(/([\{,\s])([a-zA-Z0-9_]+)\s*\(\s*\[/g, '$1"$2":[');
+    s = s.replace(/([\{,\s])([a-zA-Z0-9_]+)\s*\(\s*\{/g, '$1"$2":{');
+    s = s.replace(/\.\s*Please try again\.?/gi, '');
+    return s;
+  }
 
-/* ─── SIDEBAR ────────────────────────────────────────────── */
-.sidebar{
+  function escapeControlCharsInStrings(src){
+    let out = '';
+    let inStr = false;
+    let esc = false;
+    for(let i=0;i<src.length;i++){
+      const ch = src[i];
+      if(inStr){
+        if(esc){ out += ch; esc = false; continue; }
+        if(ch === '\\'){ out += ch; esc = true; continue; }
+        if(ch === '"'){ out += ch; inStr = false; continue; }
+        const code = ch.charCodeAt(0);
+        if(code === 10){ out += '\\n'; continue; }
+        if(code === 13){ out += '\\r'; continue; }
+        if(code === 9){ out += '\\t'; continue; }
+        if(code >= 0 && code < 32){ out += '\\u' + code.toString(16).padStart(4,'0'); continue; }
+        out += ch;
+      } else {
+        out += ch;
+        if(ch === '"') inStr = true;
+      }
+    }
+    return out;
+  }
+
+  function tryParseFromText(text){
+    const cands = findCandidates(text);
+    for(const c of cands){
+      let candidate = repairCommonErrors(c);
+      candidate = escapeControlCharsInStrings(candidate);
+      try{ return JSON.parse(candidate); }catch(_){ }
+    }
+    // fallback
+    const first = text.indexOf('{');
+    const last = text.lastIndexOf('}');
+    if(first>=0 && last>first){
+      let fallback = text.substring(first,last+1);
+      fallback = repairCommonErrors(fallback);
+      fallback = escapeControlCharsInStrings(fallback);
+      try{ return JSON.parse(fallback); }catch(_){ }
+    }
+    return null;
+  }
+
+  const parsed = tryParseFromText(cleaned);
+  if(parsed !== null) return parsed;
+
+  // If initial parse fails, attempt up to 2 automatic repair requests asking the model
+  for(let attempt=0; attempt<2; attempt++){
+    const repairPrompt = `The previous response was malformed. Extract and return ONLY the first valid JSON object or array present in the text below. Do not add any commentary or markdown. If no valid JSON exists, return {\"error\":\"no_json_found\"}.
+---
+${cleaned}
+---`;
+
+    const rr=await fetch('/api/gemini',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({messages:[{role:'user',content:repairPrompt}]})
+    });
+    const rd=await rr.json();
+    const rtext = (typeof rd.text === 'string') ? rd.text.replace(/```json|```/g,'').trim() : JSON.stringify(rd);
+    const p = tryParseFromText(rtext);
+    if(p !== null) return p;
+  }
+
+  const preview = cleaned.length>400? cleaned.slice(0,400)+'...' : cleaned;
+  throw new Error('Failed to parse AI JSON response. Preview: '+preview);
   width:220px;flex-shrink:0;
   background:var(--bg2);
   border-right:1px solid var(--border);
