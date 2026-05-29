@@ -863,8 +863,12 @@ async function callGemini(prompt){
     // Handle unquoted keys followed by paren: {concepts([ -> {"concepts":[
     s = s.replace(/([\{,\s])([a-zA-Z0-9_]+)\s*\(\s*\[/g, '$1"$2":[');
     s = s.replace(/([\{,\s])([a-zA-Z0-9_]+)\s*\(\s*\{/g, '$1"$2":{');
-    // Remove common trailing prompts appended by the model
+    // Remove very common appended instructions/requests from the model
     s = s.replace(/\.\s*Please try again\.?/gi, '');
+    s = s.replace(/\.\s*Let me know if you need any changes/gi, '');
+    s = s.replace(/\.\s*Feel free to customize/gi, '');
+    s = s.replace(/\.\s*Does this work\??/gi, '');
+    s = s.replace(/\.\s*(I hope|I've|I want|Let me|See|Check|Please)/gi, '.');
     return s;
   }
 
@@ -894,16 +898,58 @@ async function callGemini(prompt){
 
   function closeUnfinishedJSON(str){
     let s = str.trimRight();
+    
+    // Strategy: find the last complete closing brace } in the array and truncate from there,
+    // then close any remaining unclosed brackets/braces
+    const lastCompleteObjEnd = s.lastIndexOf('}');
+    if(lastCompleteObjEnd > 0){
+      // Check if there's an unclosed quote before this last }
+      let before = s.substring(0, lastCompleteObjEnd + 1);
+      let quoteCount = 0;
+      let escape = false;
+      for(let i=0; i<before.length; i++){
+        if(escape){ escape = false; continue; }
+        if(before[i] === '\\') { escape = true; continue; }
+        if(before[i] === '"') quoteCount++;
+      }
+      
+      // If odd number of quotes, we have an unclosed string — find the last complete object before it
+      if(quoteCount % 2 === 1){
+        // Find the } that closes the previous complete object
+        let bracketCount = 0;
+        for(let i = lastCompleteObjEnd; i >= 0; i--){
+          if(before[i] === '}') bracketCount++;
+          else if(before[i] === '{') {
+            bracketCount--;
+            if(bracketCount === 0 && i > 0){
+              // Found the opening { of this object, truncate before any trailing comma and after the previous }
+              let prevEnd = s.lastIndexOf('},', i);
+              if(prevEnd > 0){
+                s = s.substring(0, prevEnd + 1);
+              } else {
+                s = s.substring(0, lastCompleteObjEnd + 1);
+              }
+              break;
+            }
+          }
+        }
+      } else {
+        s = s.substring(0, lastCompleteObjEnd + 1);
+      }
+    }
+    
+    // Remove ". Please try again" patterns that might be inside strings or at end
+    s = s.replace(/\.\s*Please try again\.?$/gi, '');
+    
     let braceStack = [];
     let inStr = false;
     let esc = false;
-    let lastQuotePos = -1;
     
     for(let i=0;i<s.length;i++){
       const ch = s[i];
       if(esc){ esc = false; continue; }
       if(ch === '\\' && inStr){ esc = true; continue; }
-      if(ch === '"'){ inStr = !inStr; if(inStr) lastQuotePos = i; continue; }
+      if(ch === '"'){ inStr = !inStr; continue; }
       if(inStr) continue;
       
       if(ch === '{' || ch === '[') braceStack.push(ch);
@@ -911,12 +957,19 @@ async function callGemini(prompt){
       else if(ch === ']') { if(braceStack.length > 0 && braceStack[braceStack.length-1] === '[') braceStack.pop(); }
     }
     
-    // If we ended inside a string (unclosed quote), close it
-    if(inStr && lastQuotePos !== -1){
+    // If we ended inside a string (odd quotes), close it
+    let quoteCount = 0;
+    let escape = false;
+    for(let i=0; i<s.length; i++){
+      if(escape){ escape = false; continue; }
+      if(s[i] === '\\') { escape = true; continue; }
+      if(s[i] === '"') quoteCount++;
+    }
+    if(quoteCount % 2 === 1){
       s = s + '"';
     }
     
-    // Close any unclosed braces/brackets in reverse order
+    // Close any unclosed braces/brackets
     for(let i=braceStack.length-1;i>=0;i--){
       if(braceStack[i] === '{') s = s + '}';
       else if(braceStack[i] === '[') s = s + ']';
