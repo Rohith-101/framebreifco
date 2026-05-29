@@ -72,6 +72,7 @@
     const cands = findCandidates(text);
     for(const c of cands){
       let candidate = repairCommonErrors(c);
+      candidate = closeUnfinishedJSON(candidate);
       candidate = escapeControlCharsInStrings(candidate);
       try{ return JSON.parse(candidate); }catch(_){ }
     }
@@ -81,6 +82,7 @@
     if(first>=0 && last>first){
       let fallback = text.substring(first,last+1);
       fallback = repairCommonErrors(fallback);
+      fallback = closeUnfinishedJSON(fallback);
       fallback = escapeControlCharsInStrings(fallback);
       try{ return JSON.parse(fallback); }catch(_){ }
     }
@@ -890,9 +892,43 @@ async function callGemini(prompt){
     return out;
   }
 
+  function closeUnfinishedJSON(str){
+    let s = str.trimRight();
+    let braceStack = [];
+    let inStr = false;
+    let esc = false;
+    let lastQuotePos = -1;
+    
+    for(let i=0;i<s.length;i++){
+      const ch = s[i];
+      if(esc){ esc = false; continue; }
+      if(ch === '\\' && inStr){ esc = true; continue; }
+      if(ch === '"'){ inStr = !inStr; if(inStr) lastQuotePos = i; continue; }
+      if(inStr) continue;
+      
+      if(ch === '{' || ch === '[') braceStack.push(ch);
+      else if(ch === '}') { if(braceStack.length > 0 && braceStack[braceStack.length-1] === '{') braceStack.pop(); }
+      else if(ch === ']') { if(braceStack.length > 0 && braceStack[braceStack.length-1] === '[') braceStack.pop(); }
+    }
+    
+    // If we ended inside a string (unclosed quote), close it
+    if(inStr && lastQuotePos !== -1){
+      s = s + '"';
+    }
+    
+    // Close any unclosed braces/brackets in reverse order
+    for(let i=braceStack.length-1;i>=0;i--){
+      if(braceStack[i] === '{') s = s + '}';
+      else if(braceStack[i] === '[') s = s + ']';
+    }
+    
+    return s;
+  }
+
   const candidates = findCandidates(cleaned);
   for(const c of candidates){
     let candidate = repairCommonErrors(c);
+    candidate = closeUnfinishedJSON(candidate);
     candidate = escapeControlCharsInStrings(candidate);
     try{ return JSON.parse(candidate); }catch(_){ /* try next */ }
   }
@@ -903,6 +939,7 @@ async function callGemini(prompt){
   if(first>=0 && last>first){
     let fallback = cleaned.substring(first, last+1);
     fallback = repairCommonErrors(fallback);
+    fallback = closeUnfinishedJSON(fallback);
     fallback = escapeControlCharsInStrings(fallback);
     try{ return JSON.parse(fallback); }catch(_){ }
   }

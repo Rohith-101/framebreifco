@@ -69,7 +69,7 @@ module.exports = async (req, res) => {
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'user', content: userPrompt }],
       temperature: 0.7,
-      max_tokens: 2000,
+      max_tokens: 3000,
     }, {
       'Authorization': `Bearer ${apiKey}`,
     });
