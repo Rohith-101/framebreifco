@@ -745,17 +745,44 @@ async function callGemini(prompt){
   });
   const d=await r.json();
   if(!r.ok||d.error) throw new Error(d.error||`API error ${r.status}`);
-  try {
-    let text=d.text.replace(/```json|```/g,'').trim();
-    let jsonStart=text.indexOf('{');
-    let jsonEnd=text.lastIndexOf('}');
-    if(jsonStart>=0&&jsonEnd>jsonStart){
-      text=text.substring(jsonStart,jsonEnd+1);
+  // Robust JSON extraction: find the first balanced JSON object or array
+  const raw = (typeof d.text === 'string') ? d.text : JSON.stringify(d);
+  const cleaned = raw.replace(/```json|```/g,'').trim();
+
+  function findAndParseJSON(s){
+    const openChars = ['{','['];
+    for(let i=0;i<s.length;i++){
+      if(!openChars.includes(s[i])) continue;
+      const stack = [];
+      let j = i;
+      for(; j<s.length; j++){
+        const ch = s[j];
+        if(ch === '{' || ch === '[') stack.push(ch);
+        else if(ch === '}' || ch === ']'){
+          stack.pop();
+          if(stack.length === 0) break;
+        }
+      }
+      if(j < s.length){
+        const candidate = s.slice(i, j+1);
+        try{ return JSON.parse(candidate); }catch(_){ /* invalid candidate, continue */ }
+      }
     }
-    return JSON.parse(text);
-  }catch(e){
-    throw new Error('Failed to parse AI response: '+e.message+'. Response: '+d.text.substring(0,200));
+    return null;
   }
+
+  const parsed = findAndParseJSON(cleaned);
+  if(parsed !== null) return parsed;
+
+  // fallback: attempt to trim trailing text after last closing brace
+  const firstObj = cleaned.indexOf('{');
+  const lastObj = cleaned.lastIndexOf('}');
+  if(firstObj>=0 && lastObj>firstObj){
+    try{ return JSON.parse(cleaned.substring(firstObj, lastObj+1)); }catch(_){}
+  }
+
+  const preview = cleaned.length > 400 ? cleaned.slice(0,400) + '...' : cleaned;
+  throw new Error('Failed to parse AI JSON response. Preview: ' + preview);
 }
 
 function copy(btn,text){
