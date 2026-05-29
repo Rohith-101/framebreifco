@@ -66,7 +66,7 @@ module.exports = async (req, res) => {
     const url = 'https://api.groq.com/openai/v1/chat/completions';
 
     const result = await httpsPost(url, {
-      model: 'mixtral-8x7b-32768',
+      model: 'llama-3.1-70b-versatile',
       messages: [{ role: 'user', content: userPrompt }],
       temperature: 0.7,
       max_tokens: 2000,
