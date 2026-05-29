@@ -1,6 +1,6 @@
 const https = require('https');
 
-function httpsPost(url, data) {
+function httpsPost(url, data, headers = {}) {
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
     const postData = JSON.stringify(data);
@@ -11,6 +11,7 @@ function httpsPost(url, data) {
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(postData),
+        ...headers,
       },
     };
     const req = https.request(options, (res) => {
@@ -43,11 +44,11 @@ module.exports = async (req, res) => {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY;
 
   if (!apiKey) {
     return res.status(500).json({ 
-      error: 'GEMINI_API_KEY environment variable is missing. Please add it to your Vercel Project Settings.' 
+      error: 'GROQ_API_KEY environment variable is missing. Please add it to your Vercel Project Settings.' 
     });
   }
 
@@ -62,23 +63,24 @@ module.exports = async (req, res) => {
     }
 
     const userPrompt = body.messages[0].content;
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+    const url = 'https://api.groq.com/openai/v1/chat/completions';
 
     const result = await httpsPost(url, {
-      contents: [{ parts: [{ text: userPrompt }] }],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 2000,
-      },
+      model: 'mixtral-8x7b-32768',
+      messages: [{ role: 'user', content: userPrompt }],
+      temperature: 0.7,
+      max_tokens: 2000,
+    }, {
+      'Authorization': `Bearer ${apiKey}`,
     });
 
     if (result.status !== 200) {
       return res.status(result.status).json({ 
-        error: result.data.error?.message || 'Gemini API error' 
+        error: result.data.error?.message || 'Groq API error' 
       });
     }
 
-    const text = result.data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const text = result.data.choices?.[0]?.message?.content || '';
     return res.status(200).json({ text });
 
   } catch (err) {
