@@ -798,52 +798,97 @@ function switchTab(i,el){
   el.classList.add('active');
 }
 
-async function runStep1(){
-  collect();
-  document.getElementById('sbName').textContent=B.name;
-  document.getElementById('sbProduct').textContent=B.product;
-  document.getElementById('sidebarBrand').style.display='block';
-  goTo(1); unlocked.add(1);
-  show('s1st');hide('s1out');hide('s1btns');
+async function callGemini(prompt){
+  const r=await fetch('/api/gemini',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({messages:[{role:'user',content:prompt}]})
+  });
+  const d=await r.json();
+  if(!r.ok||d.error) throw new Error(d.error||`API error ${r.status}`);
+  // Robust JSON extraction + repair pipeline
+  const raw = (typeof d.text === 'string') ? d.text : JSON.stringify(d);
+  const cleaned = raw.replace(/```json|```/g,'').trim();
 
-  try{
-    const d=await callGemini(
-`You are a brand strategist analyzing competitor imagery for ${B.name}'s "${B.product}".
+  function findCandidates(s){
+    const candidates = [];
+    for(let i=0;i<s.length;i++){
+      const ch = s[i];
+      if(ch !== '{' && ch !== '[') continue;
+      const stack = [];
+      let j = i;
+      for(; j<s.length; j++){
+        const c = s[j];
+        if(c === '{' || c === '[') stack.push(c);
+        else if(c === '}' || c === ']'){
+          stack.pop();
+          if(stack.length === 0) break;
+        }
+      }
+      if(j < s.length){
+        candidates.push(s.slice(i, j+1));
+      }
+    }
+    return candidates;
+  }
 
-Brand context — Features: ${B.features} | Audience: ${B.audience} | Personality: ${B.persona} | Avoid: ${B.avoid} | Colors: ${B.colors}
+  function repairCommonErrors(str){
+    let s = str;
+    // Fix patterns like: "concepts([ {  -> "concepts": [ {
+    s = s.replace(/\"([a-zA-Z0-9_]+)\"\s*\(\s*\[/g, '"$1":[');
+    s = s.replace(/\"([a-zA-Z0-9_]+)\"\s*\(\s*\{/g, '"$1":{');
+    // Handle unquoted keys followed by paren: {concepts([ -> {"concepts":[
+    s = s.replace(/([\{,\s])([a-zA-Z0-9_]+)\s*\(\s*\[/g, '$1"$2":[');
+    s = s.replace(/([\{,\s])([a-zA-Z0-9_]+)\s*\(\s*\{/g, '$1"$2":{');
+    // Remove common trailing prompts appended by the model
+    s = s.replace(/\.\s*Please try again\.?/gi, '');
+    return s;
+  }
 
-Identify 5 competitor/reference brands in the Indian natural skincare space (e.g. Plum, Forest Essentials, Wow Skin Science, Biotique, Kama Ayurveda). For each: extract visual style, color approach, brand positioning in one sentence, and their specific visual weakness.
+  function escapeControlCharsInStrings(src){
+    let out = '';
+    let inStr = false;
+    let esc = false;
+    for(let i=0;i<src.length;i++){
+      const ch = src[i];
+      if(inStr){
+        if(esc){ out += ch; esc = false; continue; }
+        if(ch === '\\'){ out += ch; esc = true; continue; }
+        if(ch === '"'){ out += ch; inStr = false; continue; }
+        const code = ch.charCodeAt(0);
+        if(code === 10){ out += '\\n'; continue; }
+        if(code === 13){ out += '\\r'; continue; }
+        if(code === 9){ out += '\\t'; continue; }
+        if(code >= 0 && code < 32){ out += '\\u' + code.toString(16).padStart(4,'0'); continue; }
+        out += ch;
+      } else {
+        out += ch;
+        if(ch === '"') inStr = true;
+      }
+    }
+    return out;
+  }
 
-Then give a use-signals list (4 items) and an avoid-signals list (4 items) — must be actionable and specific, not generic.
+  const candidates = findCandidates(cleaned);
+  for(const c of candidates){
+    let candidate = repairCommonErrors(c);
+    candidate = escapeControlCharsInStrings(candidate);
+    try{ return JSON.parse(candidate); }catch(_){ /* try next */ }
+  }
 
-Respond ONLY as valid compact JSON (no markdown fences, no preamble):
-{"competitors":[{"name":"","positioning":"","visualStyle":"","colorApproach":"","weakness":""}],"useSignals":["","","",""],"avoidSignals":["","","",""]}`)
+  // final fallback: extract between first { and last }
+  const first = cleaned.indexOf('{');
+  const last = cleaned.lastIndexOf('}');
+  if(first>=0 && last>first){
+    let fallback = cleaned.substring(first, last+1);
+    fallback = repairCommonErrors(fallback);
+    fallback = escapeControlCharsInStrings(fallback);
+    try{ return JSON.parse(fallback); }catch(_){ }
+  }
 
-    document.getElementById('compCards').innerHTML=d.competitors.map(c=>`
-      <div class="card">
-        <div class="card-head">
-          <div>
-            <div class="card-name">${c.name}</div>
-            <div class="card-sub">${c.positioning}</div>
-          </div>
-          <span class="badge b-gray">Competitor</span>
-        </div>
-        <p class="card-body"><strong style="font-weight:500;color:var(--cream)">Visual style:</strong> ${c.visualStyle}</p>
-        <p class="card-body" style="margin-top:5px"><strong style="font-weight:500;color:var(--cream)">Color approach:</strong> ${c.colorApproach}</p>
-        <div class="weakness">✗ ${c.weakness}</div>
-      </div>`).join('');
-
-    document.getElementById('signalsGrid').innerHTML=`
-      <div class="signal-card">
-        <div class="signal-head"><div class="dot-green"></div><span style="color:#5DC883">Use these signals</span></div>
-        ${d.useSignals.map(s=>`<div class="signal-item">${s}</div>`).join('')}
-      </div>
-      <div class="signal-card">
-        <div class="signal-head"><div class="dot-red"></div><span style="color:var(--red)">Avoid these patterns</span></div>
-        ${d.avoidSignals.map(s=>`<div class="signal-item">${s}</div>`).join('')}
-      </div>`;
-
-    hide('s1st');show('s1out');show('s1btns');
+  const preview = cleaned.length>400? cleaned.slice(0,400)+'...' : cleaned;
+  throw new Error('Failed to parse AI JSON response. Preview: '+preview);
+}
   }catch(e){
     document.getElementById('s1st').innerHTML=`<span class="err">Error: ${e.message}. Please try again.</span>`;
   }
