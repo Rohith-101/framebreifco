@@ -1,0 +1,87 @@
+const https = require('https');
+
+function httpsPost(url, data) {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url);
+    const postData = JSON.stringify(data);
+    const options = {
+      hostname: urlObj.hostname,
+      path: urlObj.pathname + urlObj.search,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData),
+      },
+    };
+    const req = https.request(options, (res) => {
+      let body = '';
+      res.on('data', chunk => body += chunk);
+      res.on('end', () => {
+        try {
+          resolve({ status: res.statusCode, data: JSON.parse(body) });
+        } catch (e) {
+          reject(new Error('Failed to parse response: ' + body.slice(0, 200)));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(postData);
+    req.end();
+  });
+}
+
+module.exports = async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    return res.status(500).json({ 
+      error: 'GEMINI_API_KEY environment variable is missing. Please add it to your Vercel Project Settings.' 
+    });
+  }
+
+  try {
+    let body = req.body;
+    if (typeof body === 'string') {
+      body = JSON.parse(body);
+    }
+
+    if (!body || !body.messages || !body.messages[0]) {
+      return res.status(400).json({ error: 'Malformed request body' });
+    }
+
+    const userPrompt = body.messages[0].content;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+    const result = await httpsPost(url, {
+      contents: [{ parts: [{ text: userPrompt }] }],
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 2000,
+      },
+    });
+
+    if (result.status !== 200) {
+      return res.status(result.status).json({ 
+        error: result.data.error?.message || 'Gemini API error' 
+      });
+    }
+
+    const text = result.data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    return res.status(200).json({ text });
+
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
